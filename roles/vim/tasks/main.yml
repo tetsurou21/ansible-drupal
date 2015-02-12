@@ -1,0 +1,4 @@
+---
+
+- name: vim is installed
+  yum: name=vim state=present

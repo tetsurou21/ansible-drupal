@@ -1,0 +1,107 @@
+---
+
+- name: yum packages are installed
+  yum: name={{ item }} state=present
+  with_items:
+    - gcc
+    - httpd
+    - postgresql-server
+    - postgresql-devel
+    - php
+    - php-gd
+    - php-mbstring
+    - php-pgsql
+
+- name: psycopg2 is installed
+  pip: name=psycopg2 state=present
+
+- name: postgresql is initialized
+  command: service postgresql initdb
+           creates=/var/lib/pgsql/data/postgresql.conf
+
+- name: pg_hba.conf is configured
+  copy: src=pg_hba.conf
+        dest=/var/lib/pgsql/data/pg_hba.conf
+        backup=yes
+        owner=postgres
+        group=postgres
+        mode=600
+
+- name: postgresql is started
+  service: name=postgresql state=started
+
+- name: drupal user is created
+  sudo_user: postgres
+  postgresql_user: name={{ db_user }}
+                   password={{ db_pass }}
+
+- name: drupal database is created
+  sudo_user: postgres
+  postgresql_db: name=drupal
+                 encoding='UTF-8'
+                 lc_collate='ja_JP.UTF-8'
+                 lc_ctype='ja_JP.UTF-8'
+                 template='template0'
+                 owner=drupal
+
+- name: drupal dump file is copied
+  copy: src=drupal.sql
+        dest=/tmp/drupal.sql
+        mode=644
+
+- name: check drupal database is restored
+  sudo_user: postgres
+  command: psql -At -c "select value from variable where name = 'install_task'" drupal
+  register: drupal_install_task
+  ignore_errors: yes
+
+- name: drupal database is restored
+  sudo_user: postgres
+  command: psql -f /tmp/drupal.sql drupal
+  when: drupal_install_task|failed or drupal_install_task.stdout != "s:4:\"done\";"
+
+- name: composer is installed
+  script: install-composer.sh
+
+- name: drush is installed
+  script: install-drush.sh
+
+- name: src directory exists
+  file: path=/opt/src
+        state=directory
+
+- name: drupal is unarchived
+  unarchive: src=drupal-{{ version }}-japanese_{{ japanese_version }}.tgz
+             dest=/opt/src
+             creates=/opt/src/drupal-{{ version }}
+
+- name: drupal is copied
+  command: cp -r /opt/src/drupal-{{ version }} /opt/drupal
+           creates=/opt/drupal
+
+- name: drupal files directory is properly priviledged
+  file: path=/opt/drupal/sites/default/files
+        recurse=yes
+        owner=root
+        group=apache
+        mode="u+rw,g+rw"
+
+- name: drupal settings.php is copied
+  copy: src=settings.php
+        dest=/opt/drupal/sites/default/settings.php
+        owner=root
+        group=apache
+        mode="644"
+
+- name: drupal cron script is registerd
+  cron: name="drupal cron"
+        minute=0
+        job="wget -O - -q -t 1 http://localhost/drupal/cron.php"
+
+- name: drupal.conf is copied
+  copy: src=drupal.conf
+        dest=/etc/httpd/conf.d/drupal.conf
+  notify: restart httpd
+
+- name: httpd is started
+  service: name=httpd state=started
